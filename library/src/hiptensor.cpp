@@ -59,6 +59,42 @@ hiptensorStatus_t hiptensorCreate(hiptensorHandle_t** handle)
 
     auto hip_status = hipInit(0);
 
+    // CSC patch (Piece 0, CPU-node operability): on a node with no
+    // ROCm-capable device, hipInit(0) returns hipErrorNoDevice (100).
+    // The unpatched code only checks hipErrorInvalidDevice and
+    // hipErrorInvalidValue, falls through to Handle::createHandle, whose
+    // HipDevice member constructor calls CHECK_HIP_ERROR(hipGetDevice(...))
+    // and terminates the whole process via exit(EXIT_FAILURE) at
+    // hip_device.cpp:40. A library must never kill its host process for a
+    // recoverable condition; return an error status the caller can handle.
+    if(hip_status == hipErrorNoDevice)
+    {
+        auto errorCode = HIPTENSOR_STATUS_HIP_ERROR;
+        snprintf(msg,
+                 sizeof(msg),
+                 "Initialization error: no ROCm-capable device detected (%s)",
+                 hiptensorGetErrorString(errorCode));
+        logger->logError("hiptensorCreate", msg);
+        return HIPTENSOR_STATUS_HIP_ERROR;
+    }
+
+    // CSC patch (Piece 0): belt-and-braces device-count guard. Some HIP
+    // runtime builds report success from hipInit(0) yet expose zero devices
+    // (e.g. ROCR_VISIBLE_DEVICES= on a GPU node). HipDevice's constructor
+    // would still exit() in that case; refuse here with a clean status.
+    int deviceCount = 0;
+    if(hipGetDeviceCount(&deviceCount) != hipSuccess || deviceCount == 0)
+    {
+        (void)hipGetLastError(); // clear sticky error from the failed query
+        auto errorCode = HIPTENSOR_STATUS_HIP_ERROR;
+        snprintf(msg,
+                 sizeof(msg),
+                 "Initialization error: 0 HIP devices visible (%s)",
+                 hiptensorGetErrorString(errorCode));
+        logger->logError("hiptensorCreate", msg);
+        return HIPTENSOR_STATUS_HIP_ERROR;
+    }
+
     if(hip_status == hipErrorInvalidDevice)
     {
         auto errorCode = HIPTENSOR_STATUS_HIP_ERROR;

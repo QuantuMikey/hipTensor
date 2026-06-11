@@ -37,8 +37,27 @@ namespace hiptensor
         , mCuCount(0)
         , mMaxFreqMhz(0)
     {
-        CHECK_HIP_ERROR(hipGetDevice(&mDeviceId));
-        CHECK_HIP_ERROR(hipGetDeviceProperties(&mProps, mDeviceId));
+        // CSC patch (Piece 0, CPU-node operability): the upstream constructor
+        // wrapped these two queries in CHECK_HIP_ERROR, which terminates the
+        // host process (exit(EXIT_FAILURE)) when no ROCm-capable device is
+        // present. That turned a recoverable "no GPU here" condition into a
+        // fatal abort for any caller that touches hipTensor on a CPU-only
+        // node. Instead, leave the sentinel state (mDeviceId = -1,
+        // UNSUPPORTED_ARCH) on failure; downstream API entry points already
+        // compare device identity / architecture and surface clean
+        // HIPTENSOR_STATUS errors for an invalid device.
+        if(hipGetDevice(&mDeviceId) != hipSuccess)
+        {
+            (void)hipGetLastError();
+            mDeviceId = -1;
+            return;
+        }
+        if(hipGetDeviceProperties(&mProps, mDeviceId) != hipSuccess)
+        {
+            (void)hipGetLastError();
+            mDeviceId = -1;
+            return;
+        }
 
         mArch = mProps.arch;
 
