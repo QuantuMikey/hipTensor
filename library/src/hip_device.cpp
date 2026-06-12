@@ -152,6 +152,25 @@ namespace hiptensor
         {
             auto device = HipDevice();
 
+            // CSC patch (Piece 0, CPU-node operability): when NO HIP device is
+            // present at all, the patched HipDevice constructor leaves the
+            // sentinel mDeviceId == -1 instead of exit()ing. This static guard
+            // runs at shared-library load (static initialization), i.e. at
+            // `import qiskit_aer`; calling exit() here kills any host process
+            // that merely links hipTensor on a CPU-only node. Distinguish the
+            // two cases: no device -> load is fine, GPU kernels are simply
+            // never launched (callers gate on device availability and
+            // hiptensorCreate returns a clean error status); a REAL device
+            // with an unsupported arch -> keep the upstream hard stop, since
+            // HIP modules would otherwise attempt to load kernels for it.
+            if(device.getDeviceId() < 0)
+            {
+                std::cerr << "hipTensor: no ROCm-capable device detected at load; "
+                             "GPU contraction paths are disabled."
+                          << std::endl;
+                return false;
+            }
+
             if((device.getGcnArch() == HipDevice::hipGcnArch_t::UNSUPPORTED_ARCH)
                || (device.warpSize() == HipDevice::hipWarpSize_t::UNSUPPORTED_WARP_SIZE))
             {
